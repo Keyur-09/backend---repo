@@ -1,0 +1,146 @@
+name: Build & Deploy Backend
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Targer environment'
+        required: true
+        default: 'development'
+        type: choice
+        options: ['development', 'production']
+      run_mode:
+        description: "ci_only= npm checks only. ci_cd= build/push/deploy. "
+        required: false
+        default: "ci_only"
+        type: choice
+        options: [ci_only, ci_cd]
+      deploy_reason:
+        description: "reason / note for this deploy (optional)"
+        required: false
+        default: "manual-trigger"
+        type: string
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ---------------- Checkout ----------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------------- Metadata ----------------
+      - name: Set metadata
+        id: meta
+        run: |
+          echo "run_mode=${{ github.event.inputs.run_mode || 'ci_only' }}" >> $GITHUB_OUTPUT
+
+      # ---------------- Docker metadata ----------------
+      - name: Set Docker metadata
+        id: docker_meta
+        run: |
+          if [[ "${{ github.event.inputs.run_mode || 'ci_only' }}" == "ci_cd" ]]; then
+            echo "SHOULD_BUILD_AND_PUSH=true" >> $GITHUB_OUTPUT
+            echo "FULL_IMAGE=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "SHOULD_BUILD_AND_PUSH=false" >> $GITHUB_OUTPUT
+          fi
+
+      #--------------ci only steps (lint/test)----------------
+      - name: Set up Node.js
+        if: steps.meta.outputs.run_mode == 'ci_only'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.meta.outputs.run_mode == 'ci_only'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: run lint
+        if: steps.meta.outputs.run_mode == 'ci_only'
+        run: npm run lint --if-present
+
+      - name: run typescript checks
+        if: steps.meta.outputs.run_mode == 'ci_only'
+        run: npm run type-check --if-present
+
+      - name: build
+        if: steps.meta.outputs.run_mode == 'ci_only'
+        run: npm run build --if-present 
+      
+      - name: Trivy filesystem scan
+        if: steps.meta.outputs.run_mode == 'ci_only'
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+
+      # ---------------- Docker build/push ----------------
+      - name: Login to GHCR (required before Buildx bootstrap)
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: build image (scan only)
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: scan-target:local
+          build-args: |
+             BUILD_DATE=${{ github.run_started_at }}
+             VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: true  
+      
+      - name: Trivy image scan
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: scan-target:local
+          format: table 
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH      
+      
+      - name: Tag image 
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        run: |
+            docker tag scan-target:local ${{ steps.docker_meta.outputs.FULL_IMAGE }}
+              
+      - name: Push image
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        run: |
+            docker push ${{ steps.docker_meta.outputs.FULL_IMAGE }}
+
+      - name: Generate SBOM
+        if: steps.docker_meta.outputs.SHOULD_BUILD_AND_PUSH == 'true'
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+            image-ref: ${{ steps.docker_meta.outputs.FULL_IMAGE }}
+            format: spdx-json 
+            output: sbom.spdx.json
+      
