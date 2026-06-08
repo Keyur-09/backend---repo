@@ -24,16 +24,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: >-
-     ${{
-      github.event_name == 'workflow_dispatch' && github.event.inputs.environment ||
-      (github.ref == 'refs/heads/main' && 'production' || 'development')
-      }}
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_OWNER: ${{ github.repository_owner }}
-      IMAGE_NAME: ${{ github.event.repository.name }} 
-
+    
     steps:
       # ---------------- Checkout ----------------
       - name: Checkout code
