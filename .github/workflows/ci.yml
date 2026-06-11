@@ -34,18 +34,15 @@ jobs:
       - name: Set metadata
         id: meta
         run: |
-          echo "run_mode=${{ github.event.inputs.run_mode || 'ci_only' }}" >> $GITHUB_OUTPUT
+          echo "run_mode=ci_cd" >> $GITHUB_OUTPUT
 
       # ---------------- Docker metadata ----------------
       - name: Set Docker metadata
         id: docker_meta
         run: |
-          if [[ "${{ github.event.inputs.run_mode || 'ci_only' }}" == "ci_cd" ]]; then
-            echo "SHOULD_BUILD_AND_PUSH=true" >> $GITHUB_OUTPUT
-            echo "FULL_IMAGE=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-          else
-            echo "SHOULD_BUILD_AND_PUSH=false" >> $GITHUB_OUTPUT
-          fi
+          echo "SHOULD_BUILD_AND_PUSH=true" >> $GITHUB_OUTPUT
+          echo "FULL_IMAGE=ghcr.io/keyur-09/backend---repo:${{ github.sha }}" >> $GITHUB_OUTPUT
+         
 
       #--------------ci only steps (lint/test)----------------
       - name: Set up Node.js
